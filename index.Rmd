@@ -1,0 +1,306 @@
+---
+title: "Registros de Orquideas"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(sf)
+library(DT)
+library(leaflet)
+library(dplyr)
+library(leafem)
+library(leaflet.extras)
+library(plotly)
+library(spData)
+library(tidyr)
+library(raster)
+library(rmapshaper)
+library(flexdashboard)
+library(plotrix)
+library(ggplot2)
+library(rmapshaper)
+```
+Registros de datos orquideas
+================================================================================
+Column {data-width=750}
+-----------------------------------------------------------------------
+
+### Carga de Archivos y Limpieza
+
+```{r echo=FALSE}
+Datos.orquideas <- 
+  st_read(
+  "orchidaceae-cr-registros.csv",
+   options = c(
+      "X_POSSIBLE_NAMES=decimalLongitude",
+      "Y_POSSIBLE_NAMES=decimalLatitude"),quiet = TRUE)
+Datos.orqui <- 
+  st_read(
+  "orchidaceae-cr-registros.csv",
+   options = c(
+      "X_POSSIBLE_NAMES=decimalLongitude",
+      "Y_POSSIBLE_NAMES=decimalLatitude"),quiet = TRUE)
+
+Provincias <-
+  st_read(
+    "https://raw.githubusercontent.com/gf0604-procesamientodatosgeograficos/2021i-datos/main/ign/delimitacion-territorial-administrativa/cr_provincias_simp_wgs84.geojson",
+    quiet = TRUE
+  )
+
+Cantones <-
+  st_read(
+    "https://raw.githubusercontent.com/gf0604-procesamientodatosgeograficos/2021i-datos/main/ign/delimitacion-territorial-administrativa/cr_cantones_simp_wgs84.geojson",
+    quiet = TRUE)
+
+
+# Asignacion de Coordenadas 
+
+st_crs(Datos.orquideas) = 4326
+st_crs(Cantones) = 4326
+st_crs(Provincias) = 4326
+
+
+# Limpieza
+
+Datos.orquideas <-
+  Datos.orquideas %>%
+  mutate(coordinateUncertaintyInMeters = as.numeric(coordinateUncertaintyInMeters)) %>%
+  mutate(eventDate = as.Date(eventDate, "%Y-%m-%d"))
+
+Datos.orquideas$species[Datos.orquideas$species == ""] <- "especies"
+
+
+
+orquideas_CRS <- Datos.orquideas %>%
+  filter(!is.na(coordinateUncertaintyInMeters) & coordinateUncertaintyInMeters <= 1000)%>%
+  filter(species!="especies")
+
+cat("Cantidad de registros después de descartar los valores mayores a mil (1000)", nrow(Provincias))
+
+cat("Cantidad de registros después de descartar los valores mayores a mil (1000)", nrow(Cantones))
+
+```
+```{r}
+Datos.orqui$species[Datos.orquideas$species == ""] <- "especies"
+
+
+
+```
+
+
+Column {data-width=550}
+-----------------------------------------------------------------------
+
+### Etiqueta Cantidad de Especies
+
+```{r}
+valueBox(
+  value = 1418, 
+  caption = "Cantidad de especies",
+  icon = "fas fa-seedling",
+  color = "red")
+
+```
+
+### Etiqueta Cantidad total de generos
+
+```{r}
+valueBox(
+  value = 108, 
+  caption = "Cantidad total de generos",
+  icon = "fas fa-seedling",
+  color = "blue")
+```
+
+### Etiqueta Cantidad de registros
+
+```{r}
+valueBox(
+  value = 2095, 
+  caption = "Cantidad de registros",
+  icon = "fas fa-seedling",
+  color = "orange")
+```
+
+
+
+Tabla de registros y Gráfico de especies de orquideas 
+=============================================================================
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Tabla de registros
+
+```{r}
+orquideas <- 
+  orquideas_CRS %>% 
+  st_join (Cantones["canton"])
+
+orquideas <- 
+  orquideas %>% 
+  st_join (Provincias["provincia"])
+
+orquideas %>%
+  st_drop_geometry() %>%
+  dplyr::select(species, provincia, canton, eventDate) %>%
+  datatable(
+    colnames = c("Especies", "Provincia", "Cantón", "Fecha"),
+    options = list(
+      searchHighlight = TRUE,
+      pageLength = 5,
+      language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json')))
+```
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Gráfico
+
+```{r}
+especiesorquideas <- orquideas[,c('species', 'eventDate')]
+
+e.orquideas <- especiesorquideas %>%
+  group_by(especies = format(species)) %>%
+  summarize(suma_registros = n())
+
+
+e.orquideas$suma_registros<- as.numeric(e.orquideas$suma_registros)
+
+
+e.orquideas$geometry <- NULL
+
+
+
+plot_ly(e.orquideas, labels = ~especies, values = ~suma_registros, 
+        type = 'pie') %>% config(locale= "es") %>% 
+  layout(title = "Grafico Registros de Especies de Orquideas")
+```
+
+
+
+Mapeo
+==============================================================================
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Mapa de registros
+
+```{r}
+
+st_crs(orquideas) = 4326
+
+provincias_registros <-
+  Provincias %>%
+  st_join(orquideas)
+
+Provincias_CRS <- Provincias 
+
+
+registros_CRS <-
+  Provincias_CRS%>%
+  st_make_valid() %>%
+  st_join (orquideas_CRS) %>%
+  group_by (provincia) %>%
+  summarize(registros = n_distinct(gbifID, na.rm = TRUE)) %>%
+  rename(provincia = provincia) 
+  
+colores_registros <-
+  colorNumeric(palette = "Reds",
+               domain = registros_CRS$registros,
+               na.color = "transparent")
+
+leaflet() %>%
+  addTiles(group = "OSM") %>%
+  addPolygons(
+    data = registros_CRS,
+    fillColor = ~ colores_registros(registros_CRS$registros),
+    fillOpacity = 0.7,
+    stroke = TRUE,
+    color = "black",
+    weight = 1,
+    popup = paste(
+      paste(
+        "<strong>Provincia:</strong>",
+        registros_CRS$provincia
+      ),
+      paste(
+        "<strong>Cantidad de registros:</strong>",
+        registros_CRS$registros
+        
+      ),
+      sep = '<br/>'
+    ),
+    group = "Provincias - registros"
+  ) %>%
+  addCircleMarkers(
+    data = orquideas_CRS,
+    stroke = F,
+    radius = 3,
+    fillColor = 'red',
+    fillOpacity = 1,
+    popup = paste(
+      orquideas_CRS$species,
+      orquideas_CRS$stateProvince,
+      orquideas_CRS$locality,
+     orquideas_CRS$eventDate,
+      paste0("<a href='", orquideas_CRS$occurrenceID, "'>Más información</a>"),
+      sep = '<br/>'
+    ),
+    clusterOptions = markerClusterOptions(),
+    group = "Registros de orquideas"
+  ) %>%  
+  addLayersControl(baseGroups = c("OSM"),
+                   overlayGroups = c("Provincias - registros", "Registros de orquideas")) %>%
+  addLegend(
+    position = "bottomleft",
+    pal = colores_registros,
+    values = registros_CRS$registros,
+    group = "Provincias - registros",
+    title = "Cantidad de registros"
+  )
+
+
+
+
+```
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Mapa capa raster 
+
+```{r}
+alt <- getData(
+  "worldclim",
+  var = "alt",
+  res = .5,
+  lon = -84,
+  lat = 10)
+
+altitud_cr <-
+  alt %>%
+  mask(Provincias_CRS) %>%
+  crop(Provincias_CRS)
+
+altitud_orquideas <-
+  alt %>%
+  mask(orquideas_CRS) %>%
+  crop(orquideas_CRS)
+
+leaflet() %>%
+  setView(lng = -84.0, lat = 10.0, zoom = 7.45) %>%
+  addTiles(group = "OpenStreetMap") %>%
+  addRasterImage(altitud_orquideas, colors = "red", group = "Altitud de las orquideas") %>%
+  addRasterImage(altitud_cr, colors = "YlGnBu", group = "Altitud Cr") %>%
+  addLayersControl(
+    baseGroups = c("OpenStreetMap"),
+    overlayGroups = c("Altitud", "Altitud de las orquideas")
+  )
+
+
+
+```
